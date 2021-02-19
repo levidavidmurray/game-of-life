@@ -1,4 +1,4 @@
 export const Config = {
-    cellSize: 8,
+    cellSize: 6,
     updateFrequencyMS: 100,
 }

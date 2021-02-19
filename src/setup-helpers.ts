@@ -135,6 +135,10 @@ export function gridToPixels(gridIndex: number): number {
     return Config.cellSize * gridIndex;
 }
 
+export function pixelsToGrid(pixels: number): number {
+    return Math.floor(pixels / Config.cellSize);
+}
+
 export function setInput(keyCode: number) {
   const key = {
       code: keyCode,

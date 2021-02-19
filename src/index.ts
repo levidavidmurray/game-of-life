@@ -3,7 +3,7 @@ import { ease } from 'pixi-ease';
 import { Assets } from './lib/assets';
 import { Colors } from './lib/colors';
 import { Config } from './config';
-import { drawCell, drawGrid, drawUI, setInput } from './setup-helpers';
+import { drawCell, drawGrid, drawUI, gridToPixels, pixelsToGrid, setInput } from './setup-helpers';
 
 const load = (app: PIXI.Application) => {
     return new Promise((resolve) => {
@@ -19,6 +19,8 @@ const main = async () => {
 
     // Actual app
     let app = new PIXI.Application();
+
+    app.stage.sortableChildren = true;
 
     // Display application properly
     document.body.style.margin = '0';
@@ -39,10 +41,16 @@ const main = async () => {
     background.beginFill(Colors.Background, 1);
     background.drawRect(0, 0, screen().width, screen().height);
     background.endFill();
+    background.zIndex = -1;
     app.stage.addChild(background);
 
+    let currentX = 0;
+    let currentY = 0;
+
+    let indicesChangedLastStep: {[key: number]: {[key: number]: boolean}} = {};
     let currentCellMap: number[][] = [];
     let graphicsCellMap: PIXI.Graphics[][] = [];
+    let pressedCellCache: {[key: number]: {[key: number]: boolean}} = {};
 
     let colCount = Math.ceil(screen().width / Config.cellSize);
     let rowCount = Math.ceil(screen().height / Config.cellSize);
@@ -52,10 +60,97 @@ const main = async () => {
     let isPaused = true;
     let elapsedMS = 0;
 
+    const darkenFilter = new PIXI.filters.ColorMatrixFilter();
+    darkenFilter.brightness(0.8, false);
+
+    const mouseContainer = new PIXI.Container();
+    mouseContainer.hitArea = new PIXI.Rectangle(0, 0, window.innerWidth, window.innerHeight);
+    mouseContainer.zIndex = 0;
+
+    const liveCell = drawCell(0, 0);
+
+    // app.view.addEventListener('contextmenu', (event) => {
+    //     console.log(event);
+    // });
+
+    mouseContainer.interactive = true;
+
+    mouseContainer
+    .on('rightdown', (event: MouseEvent) => {
+        cellRightDown(currentX, currentY);
+    })
+    .on('rightup', (event: MouseEvent) => {
+        rightMousePressed = false;
+        commitPressedCellCache();
+    })
+    .on('pointerdown', () => cellPointerDown(currentX, currentY))
+    .on('pointerup', () => {
+        leftMousePressed = false;
+        commitPressedCellCache();
+    })
+    .on('mousemove', (event: PIXI.interaction.InteractionEvent) => {
+        const newX = pixelsToGrid(event.data.global.x);
+        const newY = pixelsToGrid(event.data.global.y);
+        if (currentX !== newX || currentY !== newY) {
+            if (leftMousePressed) {
+                if (!isCellAlive(newX, newY)) {
+                    createLife(newX, newY);
+                    addToPressedCellCache(newX, newY);
+                }
+            } else if (rightMousePressed && isCellAlive(newX, newY)) {
+                    destroyLife(newX, newY);
+                    addToPressedCellCache(newX, newY);
+            }
+
+            currentX = newX;
+            currentY = newY;
+        }
+    });
+
+    function commitPressedCellCache() {
+        for (let y in pressedCellCache) {
+            for (let x in pressedCellCache[y]) {
+                addChangedCells(parseInt(x), parseInt(y));
+            }
+        }
+
+        pressedCellCache = {};
+    }
+
+    function addToPressedCellCache(x: number, y: number) {
+        if (!pressedCellCache[y])
+            pressedCellCache[y] = {};
+
+        pressedCellCache[y][x] = true;
+    }
+
+    // @ts-ignore
+    window.app = app;
+
+    // @ts-ignore
+    window.cells = currentCellMap;
+    // @ts-ignore
+    window.graphics = graphicsCellMap;
+
+    function addChangedCells(x: number, y: number) {
+        if (!indicesChangedLastStep[y])
+            indicesChangedLastStep[y] = {};
+        const neighbourIndices = findNeighbourIndices(x, y);
+        for (let neighbourYS in neighbourIndices) {
+            for (let neighbourXS of neighbourIndices[neighbourYS]) {
+                if (!indicesChangedLastStep[neighbourYS])
+                    indicesChangedLastStep[neighbourYS] = {};
+                indicesChangedLastStep[neighbourYS][neighbourXS] = true;
+            }
+        }
+        indicesChangedLastStep[y][x] = true;
+    }
+
+
     const initCellMap = () => {
         const container = new PIXI.Container();
-        const darkenFilter = new PIXI.filters.ColorMatrixFilter();
-        darkenFilter.brightness(0.8, false);
+        // const darkenFilter = new PIXI.filters.ColorMatrixFilter();
+        // darkenFilter.brightness(0.8, false);
 
         for (let y = 0; y < rowCount; y++) {
             currentCellMap[y] = [];
@@ -63,37 +158,11 @@ const main = async () => {
 
             for (let x = 0; x < colCount; x++) {
                 currentCellMap[y].push(0);
-                const cell = drawCell(x, y);
+                const cell = new PIXI.Graphics(liveCell.geometry);
+                cell.x = gridToPixels(x);
+                cell.y = gridToPixels(y);
 
-                cell.interactive = true;
                 cell.alpha = 0;
-                cell
-                    .on('rightdown', () => cellRightDown(x, y))
-                    .on('rightup', (event: MouseEvent) => {
-                        rightMousePressed = false;
-                        event.preventDefault();
-                    })
-                    .on('pointerdown', () => cellPointerDown(x, y))
-                    .on('pointerup', () => leftMousePressed = false)
-                    .on('mouseout', () => {
-                        cell.filters = [];
-                        if (!isCellAlive(x, y))
-                            cell.alpha = 0;
-                    })
-                    .on('mouseover', () => {
-                        if (!isCellAlive(x, y)) {
-                            if (leftMousePressed) {
-                                createLife(x, y);
-                            } else {
-                                cell.alpha = 1;
-                                cell.filters = [darkenFilter];
-                            }
-                        } else {
-                            if (rightMousePressed) {
-                                destroyLife(x, y);
-                            }
-                        }
-                    });
 
                 container.addChild(cell);
 
@@ -106,11 +175,13 @@ const main = async () => {
 
     function cellRightDown(x: number, y: number) {
         destroyLife(x, y);
+        addChangedCells(x, y);
         leftMousePressed = false;
         rightMousePressed = true;
     }
 
     function cellPointerDown(x: number, y: number) {
+        addChangedCells(x, y);
         createLife(x, y);
         rightMousePressed = false;
         leftMousePressed = true;
@@ -156,6 +227,35 @@ const main = async () => {
         }
     }
 
+    function findNeighbourIndices(x: number, y: number): {[key: number]: number[]} {
+        const indices: {[key: number]: number[]} = { [y-1]: [], [y]: [], [y+1]: [] };
+        for (let i = 0; i < 3; i++) {
+            const nx = (x - 1) + i;
+            if (nx < 0 || nx >= colCount)
+                continue
+
+            // row above
+            let nyAbove = y - 1;
+            if (nyAbove >= 0) {
+                indices[nyAbove].push(nx)
+            }
+            // row below
+            let nyBelow = y + 1;
+            if (nyBelow < rowCount) {
+                indices[nyBelow].push(nx)
+            }
+
+        }
+
+        // current row
+        if (x-1 >= 0) 
+            indices[y].push(x-1); // left
+        if (x+1 >= 0) 
+            indices[y].push(x+1); // right
+
+        return indices;
+    }
+
     function findNeighbourCount(x: number, y: number) {
         let count = 0;
 
@@ -195,14 +295,33 @@ const main = async () => {
         // @ts-ignore
         window.gs = gsFilter;
 
+        const scalableContainer = new PIXI.Container();
+
         const cellContainer = initCellMap();
-        app.stage.addChild(cellContainer);
+        scalableContainer.addChild(cellContainer);
 
         // Draw grid lines
-        app.stage.addChild(drawGrid(screen(), Config.cellSize));
+        scalableContainer.addChild(drawGrid(screen(), Config.cellSize));
+
+        const left = setInput(37), right = setInput(39);
+        const scaleMin = 1;
+        const scaleMax = 1.7;
+        scalableContainer.pivot.set(0.5);
+        scalableContainer.scale.set(scaleMin);
+        // @ts-ignore
+        window.scalableContainer = scalableContainer;
+        left.press = () => {
+            const currentScale = scalableContainer.scale.x;
+            scalableContainer.scale.set(Math.max(scaleMin, currentScale - 0.1));
+        }
+        right.press = () => {
+            const currentScale = scalableContainer.scale.x;
+            scalableContainer.scale.set(Math.min(scaleMax, currentScale + 0.1));
+        }
 
         // Draw UI
         const {UIContainer, trash, paused} = drawUI(screen());
+
         trash.on('click', () => {
             destroyAllLife();
             renderPausedUI();
@@ -210,20 +329,10 @@ const main = async () => {
 
         const renderPausedUI = () => {
             if (isPaused) {
-                // background.beginFill(Colors.BackgroundPaused, 1);
-                // background.drawRect(0, 0, screen().width, screen().height);
-                // background.endFill();
                 app.stage.filters = [];
-                // gsFilter.greyscale(1, false);
-                // cellContainer.filters = [gsFilter]
-
                 paused.visible = true;
-                const enter = ease.add(paused, {scale: 0.15, alpha: 1}, {duration: 300, ease: 'easeOutQuad'});
+                ease.add(paused, {scale: 0.15, alpha: 1}, {duration: 300, ease: 'easeOutQuad'});
             } else {
-                // background.beginFill(Colors.Background, 1);
-                // background.drawRect(0, 0, screen().width, screen().height);
-                // background.endFill();
-
                 colorFilter.hue(305, false);
                 app.stage.filters = [colorFilter];
                 cellContainer.filters = []
@@ -239,6 +348,9 @@ const main = async () => {
             renderPausedUI();
         };
 
+        UIContainer.zIndex = 10;
+        scalableContainer.zIndex = -1;
+        app.stage.addChild(scalableContainer);
         app.stage.addChild(UIContainer);
 
         renderPausedUI();
@@ -246,15 +358,87 @@ const main = async () => {
         app.ticker.add(delta => update(delta));
     }
 
+    function getMouse(): PIXI.interaction.InteractionData {
+        return app.renderer.plugins.interaction.mouse;
+    }
+
     function update(delta: number) {
+        const mouse = getMouse();
+        currentX = pixelsToGrid(mouse.global.x);
+        currentY = pixelsToGrid(mouse.global.y);
+
         elapsedMS += app.ticker.elapsedMS;
         if (!isPaused) {
 
             if (elapsedMS >= Config.updateFrequencyMS) {
                 elapsedMS = 0;
-                updateLife();
+                updateLifeOptimized();
             }
         }
+    }
+
+    // @ts-ignore
+    window.indicesChangedLastStep = () => indicesChangedLastStep; // TODO: REMOVE
+
+    // only update the cells that were updated or whose neighbours were updated last generation
+    function updateLifeOptimized() {
+        const indicesChangedThisStep: {[key: number]: {[key: number]: boolean}} = {};
+        const nextCellMap: number[][] = [];
+        currentCellMap.forEach((row) => nextCellMap.push(row.slice(0)));
+
+        for (let ys in indicesChangedLastStep) {
+            const y = parseInt(ys, 10);
+
+            for (let xs in indicesChangedLastStep[ys]) {
+                // we know currentCellMap[y][x] was updated last generation
+                // if it changes this generation, add to indicesChangedThisStep
+                const x = parseInt(xs, 10);
+                const neighbourCount = findNeighbourCount(x, y);
+                const currentlyAlive = currentCellMap[y][x] == 1;
+                const aliveNext = (neighbourCount == 2 && currentlyAlive) || neighbourCount == 3;
+                const willChange = (currentlyAlive && !aliveNext) || (!currentlyAlive && aliveNext);
+
+                // if changing this step, add all neighbours to indicesChangedThisStep
+                if (willChange || currentlyAlive) {
+                    const neighbourIndices = findNeighbourIndices(x, y);
+                    for (let neighbourYS in neighbourIndices) {
+                        for (let neighbourXS of neighbourIndices[neighbourYS]) {
+                            if (!indicesChangedThisStep[neighbourYS])
+                                indicesChangedThisStep[neighbourYS] = {};
+                            indicesChangedThisStep[neighbourYS][neighbourXS] = true;
+                        }
+                    }
+
+                    // add to indicesChangedThisStep
+                    indicesChangedThisStep[y][x] = true;
+                    nextCellMap[y][x] = aliveNext ? 1 : 0;
+                }
+
+            }
+        }
+
+        for (let ys in indicesChangedThisStep) {
+            const y = parseInt(ys, 10);
+
+            for (let xs in indicesChangedThisStep[ys]) {
+                const x = parseInt(xs, 10);
+                try {
+                    if (nextCellMap[y][x]) {
+                        if (!currentCellMap[y][x]) {
+                            createLife(x, y);
+                        }
+                    } else {
+                        if (currentCellMap[y][x]) {
+                            destroyLife(x, y);
+                        }
+                    }
+                } catch (error) {
+                    console.error(`Error creating or destroying cell: (${x}, ${y})`);
+                }
+            }
+        }
+
+        indicesChangedLastStep = indicesChangedThisStep;
     }
 
     function updateLife() {
@@ -270,6 +454,7 @@ const main = async () => {
                 const neighbourCount = findNeighbourCount(x, y);
                 const currentlyAlive = currentCellMap[y][x] == 1;
                 const aliveNext = (neighbourCount == 2 && currentlyAlive) || neighbourCount == 3;
+                // if changed, add to changed lastStep array
                 nextCellMap[y].push(aliveNext ? 1 : 0);
             }
         }
@@ -298,6 +483,8 @@ const main = async () => {
     });
 
     setup();
+
+    app.stage.addChild(mouseContainer);
 
     document.body.appendChild(app.view);
 };
