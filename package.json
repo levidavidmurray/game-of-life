@@ -1,11 +1,11 @@
 {
-    "name": "pixijs-typescript-starter",
+    "name": "game-of-life",
     "version": "0.0.1",
-    "description": "A boilerplate to start developping a PixiJS game or animation using TypeScript (VS Code & Chrome).",
+    "description": "Conway's Game of Life",
     "scripts": {
         "dev": "webpack-dev-server -d"
     },
-    "author": "Guillaume DESFORGES <aceus02@gmail.com>",
+    "author": "Levi Murray <levi@levimurray.dev>",
     "license": "MIT",
     "devDependencies": {
         "clean-webpack-plugin": "^3.0.0",
@@ -19,6 +19,7 @@
         "webpack-dev-server": "^3.10.3"
     },
     "dependencies": {
+        "pixi-ease": "^3.0.7",
         "pixi.js": "5.2.1"
     }
 }
