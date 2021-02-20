@@ -40,6 +40,7 @@ export function drawInstructions(): PIXI.Container {
 
 export function drawGrid({width, height}: PIXI.Rectangle, cellSize: number): PIXI.Container {
     const container = new PIXI.Container();
+    container.name = "grid";
 
     for (let i = cellSize; i < Math.max(width, height); i += cellSize) {
         // x-axis
